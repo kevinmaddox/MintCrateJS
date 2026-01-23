@@ -212,7 +212,7 @@ export class MintCrate {
     for (const mediaName in SYSTEM_MEDIA_B64.graphics) {
       promises.push(this.#loadImage(SYSTEM_MEDIA_B64.graphics[mediaName])
         .then((img) => {
-          this.#systemImages[mediaName] = this.#colorKeyImage(img);
+          this.#systemImages[mediaName] = this.#colorKeyImage(img, true);
         })
       );
     }
@@ -221,7 +221,7 @@ export class MintCrate {
     for (const mediaName in SYSTEM_MEDIA_B64.fonts) {
       promises.push(this.#loadImage(SYSTEM_MEDIA_B64.fonts[mediaName])
         .then((img) => {
-          this.#data.fonts[mediaName] = this.#formatFont(img);
+          this.#data.fonts[mediaName] = this.#formatFont(img, true);
         })
       );
     }
@@ -287,9 +287,8 @@ export class MintCrate {
   }
   
   #drawLoadingScreen(statusMessage) {
-    return;
     let font = this.#data.fonts['system_boot'];
-    let msgWidth = font.tileWidth * statusMessage.length;
+    let msgWidth = font.charWidth * statusMessage.length;
     
     this.#clearCanvas();
     
@@ -297,9 +296,10 @@ export class MintCrate {
     this.#backContext.fillRect(0, 0, this.#BASE_WIDTH, this.#BASE_HEIGHT);
     
     this.#drawText(
-      statusMessage, font,
+      [statusMessage],
+      font,
       (this.#BASE_WIDTH  / 2) - (msgWidth        / 2),
-      (this.#BASE_HEIGHT / 2) - (font.tileHeight / 2)
+      (this.#BASE_HEIGHT / 2) - (font.charHeight / 2)
     );
     
     this.#renderFrame();
@@ -319,9 +319,9 @@ export class MintCrate {
     });
   }
   
-  #formatFont(img) {
+  #formatFont(img, isSystemResource = false) {
     return {
-      img: this.#colorKeyImage(img),
+      img: this.#colorKeyImage(img, isSystemResource),
       charWidth: img.width / 32,
       charHeight: img.height / 3
     };
@@ -331,7 +331,7 @@ export class MintCrate {
     
   }
   
-  #colorKeyImage(img) {
+  #colorKeyImage(img, isSystemResource = false) {
     this.#colorKeyCanvas.width = img.width;
     this.#colorKeyCanvas.height = img.height;
     this.#colorKeyContext.clearRect(0, 0, img.width, img.height);
@@ -340,7 +340,15 @@ export class MintCrate {
     
     let imgData = this.#colorKeyContext.getImageData(0, 0, img.width, img.height);
     
-    for (const color of this.#colorKeys) {
+    let colorKeys = this.#colorKeys;
+    if (isSystemResource) {
+      colorKeys = [
+        {r:  82, g: 173, b: 154},
+        {r: 140, g: 222, b: 205}
+      ];
+    }
+    
+    for (const color of colorKeys) {
       for (let i = 0; i < imgData.data.length; i += 4) {
         
         if (
@@ -389,6 +397,7 @@ export class MintCrate {
         return;
       
       // this.#loadFonts();
+      this.#initDone();
     });
   }
   
@@ -402,17 +411,116 @@ export class MintCrate {
     }
   }
   
+  #initDone() {
+    console.log(Inu.#data);
+    this.#drawLoadingScreen('Loading Complete!');
+    this.#loadingQueue = null;
+    this.changeRoom(this.#STARTING_ROOM);
+    
+    if (this.#quickBoot) {
+      window.requestAnimationFrame(this.#gameLoop)
+    } else {
+      setTimeout(() => {
+        this.#clearCanvas();
+        this.#renderFrame();
+      }, 1000);
+      setTimeout(() => window.requestAnimationFrame(this.#gameLoop), 1500);
+    }
+  }
+  
   
   
   //----------------------------------------------------------------------------
   
-  #drawText() {
-    
+  #drawText(
+    textLines,
+    font,
+    x,
+    y,
+    lineSpacing = 0,
+    alignment = "left"
+  ) {
+    // Draw lines of text, character-by-character
+    for (let lineNum = 0; lineNum < textLines.length; lineNum++) {
+      // Get line text
+      const line = textLines[lineNum];
+      
+      // Figure out base offset based on text alignment
+      let xOffset = 0
+      
+      if (alignment === "right") {
+        xOffset = line.length * font.charWidth
+      } else if (alignment === "center") {
+        xOffset = Math.floor(line.length * font.charWidth / 2)
+      }
+      
+      // Draw characters
+      for (let charNum = 0; charNum < line.length; charNum++) {
+        // Get ASCII character
+        const character = line.charAt(charNum);
+        
+        // Get linear position of tile based on ASCII key code.
+        // Our map starts at the // whitespace character, which is 32.
+        // Look up an ASCII map for details.
+        const asciiCode = line.charCodeAt(charNum) - 32;
+        
+        // Determine character tile position in bitmap font image
+        const charTile = {
+          row: Math.floor((asciiCode / 32)),
+          col: asciiCode % 32
+        };
+        
+        // Draw character
+        this.#backContext.drawImage(
+          font.img,                                                  // image
+          charTile.col * font.charWidth,                             // sx
+          charTile.row * font.charHeight,                            // sy
+          font.charWidth,                                            // sWidth
+          font.charHeight,                                           // sHeight
+          x + (font.charWidth * charNum) - xOffset,                  // dx
+          y + (font.charHeight * lineNum) + (lineSpacing * lineNum), // dy
+          font.charWidth,                                            // dWidth
+          font.charHeight                                            // dHeight
+        );
+      }
+    }
   }
   
   
   changeRoom(room) {
     this.room = new room(this);
+  }
+  
+  #gameLoop(fpsTimeNow) {
+    this.#update(fpsTimeNow);
+    this.#draw();
+  }
+  
+  #update(fpsTimeNow) {
+    requestAnimationFrame(this.#gameLoop);
+    
+    // Throttle FPS
+    const delta = fpsTimeNow - this.#fpsTimeLast;
+    
+    if (delta <= this.#frameInterval)
+      return;
+    
+    this.#fpsTimeLast = fpsTimeNow - (delta % this.#frameInterval);
+    
+    // Calculate FPS
+    this.#frameCounter++;
+    if (fpsTimeNow >= (this.#fpsFrameLast + 1000)) {
+      this.#currentFps = this.#frameCounter;
+      this.#frameCounter = 0;
+      this.#fpsFrameLast = fpsTimeNow;
+    }
+  }
+  
+  #draw() {
+    // Prepare canvas for rendering frame
+    this.#clearCanvas();
+    
+    this.#renderFrame();
   }
   
   #clearCanvas() {
