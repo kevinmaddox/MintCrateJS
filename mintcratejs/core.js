@@ -1,8 +1,18 @@
+// -----------------------------------------------------------------------------
+// MintCrate - Core
+// Framework core
+// -----------------------------------------------------------------------------
+
 'use strict';
 
 import { SYSTEM_MEDIA_B64 } from "./img/b64.js";
 
 export class MintCrate {
+  
+  //----------------------------------------------------------------------------
+  // Private variables
+  //----------------------------------------------------------------------------
+  
   #frontCanvas;
   #frontContext;
   #backCanvas;
@@ -63,6 +73,10 @@ export class MintCrate {
   #instances;
   #drawOrders;
   
+  //----------------------------------------------------------------------------
+  // Constructor
+  //----------------------------------------------------------------------------
+  
   constructor(
     divTargetId,
     baseWidth, baseHeight,
@@ -71,7 +85,8 @@ export class MintCrate {
   ) {
     // Initialize render canvases/contexts
     this.#frontCanvas = document.createElement('canvas');
-    this.#frontCanvas.addEventListener('contextmenu', event => event.preventDefault());
+    this.#frontCanvas.addEventListener('contextmenu',
+      event => event.preventDefault());
     this.#frontCanvas.width = baseWidth;
     this.#frontCanvas.height = baseHeight;
     
@@ -236,8 +251,8 @@ export class MintCrate {
         // this.#loadActives();
         this.#loadBackdrops();
       } else {
-        let over = () => { this.#drawReadyScreen(1); };
-        let out  = () => { this.#drawReadyScreen(0); };
+        let over = () => { this.#displayReadyScreen(1); };
+        let out  = () => { this.#displayReadyScreen(0); };
         
         let click = () => {
           this.#frontCanvas.style.cursor = '';
@@ -257,13 +272,13 @@ export class MintCrate {
         this.#frontCanvas.addEventListener('mouseout', out);
         this.#frontCanvas.addEventListener('click', click);
         
-        this.#drawReadyScreen(0);
+        this.#displayReadyScreen(0);
         this.#frontCanvas.style.cursor = 'pointer';
       }
     });
   }
   
-  #drawReadyScreen(state) {
+  #displayReadyScreen(state) {
     // state = 0: Mouse not hovering
     // state = 1: Mouse hovering
     
@@ -286,7 +301,7 @@ export class MintCrate {
     this.#renderFrame();
   }
   
-  #drawLoadingScreen(statusMessage) {
+  #displayLoadingScreen(statusMessage) {
     let font = this.#data.fonts['system_boot'];
     let msgWidth = font.charWidth * statusMessage.length;
     
@@ -328,7 +343,7 @@ export class MintCrate {
   }
   
   defineColorKeys(rgbSets) {
-    
+    // TODO: This
   }
   
   #colorKeyImage(img, isSystemResource = false) {
@@ -338,7 +353,12 @@ export class MintCrate {
     
     this.#colorKeyContext.drawImage(img, 0, 0);
     
-    let imgData = this.#colorKeyContext.getImageData(0, 0, img.width, img.height);
+    let imgData = this.#colorKeyContext.getImageData(
+      0,
+      0,
+      img.width,
+      img.height
+    );
     
     let colorKeys = this.#colorKeys;
     if (isSystemResource) {
@@ -372,16 +392,15 @@ export class MintCrate {
   }
   
   defineBackdrops(data) {
-    this.#loadingQueue.backdrop = data;
+    this.#loadingQueue.backdrops = data;
   }
   
   #loadBackdrops() {
     console.log('Loading Backdrops');
-    this.#drawLoadingScreen('Loading Backdrops');
-    return;
+    this.#displayLoadingScreen('Loading Backdrops');
     
     let promises = [];
-    for (const item of this.#loadingQueue.backdrop) {
+    for (const item of this.#loadingQueue.backdrops ?? []) {
       // Load and store backdrop image
       promises.push(this.#loadImage(`res_backdrops/${item.name}.png`)
         .then((img) =>
@@ -412,25 +431,156 @@ export class MintCrate {
   }
   
   #initDone() {
-    console.log(Inu.#data);
-    this.#drawLoadingScreen('Loading Complete!');
+    console.log(this.#data);
+    this.#displayLoadingScreen('Loading Complete!');
     this.#loadingQueue = null;
     this.changeRoom(this.#STARTING_ROOM);
     
     if (this.#quickBoot) {
-      window.requestAnimationFrame(this.#gameLoop)
+      window.requestAnimationFrame(() => this.#gameLoop());
     } else {
+      // Wipe the screen after a moment
       setTimeout(() => {
         this.#clearCanvas();
         this.#renderFrame();
       }, 1000);
-      setTimeout(() => window.requestAnimationFrame(this.#gameLoop), 1500);
+      
+      // Pause for a further moment before starting the game
+      setTimeout(
+        () => window.requestAnimationFrame(() => this.#gameLoop()),
+        1500
+      );
     }
   }
   
+  // ---------------------------------------------------------------------------
+  // Room management
+  // ---------------------------------------------------------------------------
   
+  changeRoom(room) {
+    this.room = new room(this);
+  }
+  
+  // ---------------------------------------------------------------------------
+  // Queued functions
+  // ---------------------------------------------------------------------------
+  
+  // TODO: This
+  
+  // ---------------------------------------------------------------------------
+  // Creating game objects
+  // ---------------------------------------------------------------------------
+  
+  // TODO: This
+  
+  // ---------------------------------------------------------------------------
+  // Camera management
+  // ---------------------------------------------------------------------------
+  
+  // TODO: This
+  
+  // ---------------------------------------------------------------------------
+  // Managing tilemaps
+  // ---------------------------------------------------------------------------
+  
+  // TODO: This
+  
+  // ---------------------------------------------------------------------------
+  // Collision testing
+  // ---------------------------------------------------------------------------
+  
+  // TODO: This
+  
+  // ---------------------------------------------------------------------------
+  // Mouse input
+  // ---------------------------------------------------------------------------
+  
+  // TODO: This
   
   //----------------------------------------------------------------------------
+  // Keyboard input
+  //----------------------------------------------------------------------------
+  
+  // TODO: This
+  
+  // ---------------------------------------------------------------------------
+  // Audio
+  // ---------------------------------------------------------------------------
+  
+  // TODO: This
+  
+  // ---------------------------------------------------------------------------
+  // Debugging
+  // ---------------------------------------------------------------------------
+  
+  setQuickBoot(enabled) {
+    this.#quickBoot = enabled;
+  }
+  
+  // ---------------------------------------------------------------------------
+  // Runtime
+  // ---------------------------------------------------------------------------
+  
+  #gameLoop(fpsTimeNow) {
+    this.#update(fpsTimeNow);
+    this.#draw();
+  }
+  
+  #update(fpsTimeNow) {
+    requestAnimationFrame(() => this.#gameLoop());
+    
+    // Throttle FPS
+    const delta = fpsTimeNow - this.#fpsTimeLast;
+    
+    if (delta <= this.#frameInterval)
+      return;
+    
+    this.#fpsTimeLast = fpsTimeNow - (delta % this.#frameInterval);
+    
+    // Calculate FPS
+    this.#frameCounter++;
+    if (fpsTimeNow >= (this.#fpsFrameLast + 1000)) {
+      this.#currentFps = this.#frameCounter;
+      this.#frameCounter = 0;
+      this.#fpsFrameLast = fpsTimeNow;
+    }
+  }
+  
+  //----------------------------------------------------------------------------
+  // Graphics rendering
+  //----------------------------------------------------------------------------
+  
+  #clearCanvas() {
+    if (this.#currentRoom) {
+      this.#backContext.fillStyle = this.#currentRoom.getBackgroundColor();
+    } else {
+      this.#backContext.fillStyle = 'black';
+    }
+    
+    this.#backContext.fillRect(0, 0, this.#BASE_WIDTH, this.#BASE_HEIGHT);
+  }
+  
+  #renderFrame() {
+    this.#frontContext.drawImage(
+      this.#backCanvas,                       // Image
+      0,                                      // sx
+      0,                                      // sy
+      this.#BASE_WIDTH,                       // sWidth
+      this.#BASE_HEIGHT,                      // sHeight
+      0,                                      // dx
+      0,                                      // dy
+      this.#BASE_WIDTH  * this.#SCREEN_SCALE, // dWidth
+      this.#BASE_HEIGHT * this.#SCREEN_SCALE  // dHeight
+    );
+  }
+  
+  #draw() {
+    // Prepare canvas for rendering frame
+    this.#clearCanvas();
+    
+    // Copy offscreen canvas to visible canvas
+    this.#renderFrame();
+  }
   
   #drawText(
     textLines,
@@ -484,73 +634,5 @@ export class MintCrate {
         );
       }
     }
-  }
-  
-  
-  changeRoom(room) {
-    this.room = new room(this);
-  }
-  
-  #gameLoop(fpsTimeNow) {
-    this.#update(fpsTimeNow);
-    this.#draw();
-  }
-  
-  #update(fpsTimeNow) {
-    requestAnimationFrame(this.#gameLoop);
-    
-    // Throttle FPS
-    const delta = fpsTimeNow - this.#fpsTimeLast;
-    
-    if (delta <= this.#frameInterval)
-      return;
-    
-    this.#fpsTimeLast = fpsTimeNow - (delta % this.#frameInterval);
-    
-    // Calculate FPS
-    this.#frameCounter++;
-    if (fpsTimeNow >= (this.#fpsFrameLast + 1000)) {
-      this.#currentFps = this.#frameCounter;
-      this.#frameCounter = 0;
-      this.#fpsFrameLast = fpsTimeNow;
-    }
-  }
-  
-  #draw() {
-    // Prepare canvas for rendering frame
-    this.#clearCanvas();
-    
-    this.#renderFrame();
-  }
-  
-  #clearCanvas() {
-    if (this.#currentRoom)
-      this.#backContext.fillStyle = this.#currentRoom.getBackgroundColor();
-    else
-      this.#backContext.fillStyle = 'black';
-    
-    this.#backContext.fillRect(0, 0, this.#BASE_WIDTH, this.#BASE_HEIGHT);
-  }
-  
-  #renderFrame() {
-    this.#frontContext.drawImage(
-      this.#backCanvas,                       // Image
-      0,                                      // sx
-      0,                                      // sy
-      this.#BASE_WIDTH,                       // sWidth
-      this.#BASE_HEIGHT,                      // sHeight
-      0,                                      // dx
-      0,                                      // dy
-      this.#BASE_WIDTH  * this.#SCREEN_SCALE, // dWidth
-      this.#BASE_HEIGHT * this.#SCREEN_SCALE  // dHeight
-    );
-  }
-  
-  // ---------------------------------------------------------------------------
-  // Methods for toggling debug functionality
-  // ---------------------------------------------------------------------------
-  
-  #setQuickBoot(enabled) {
-    this.#quickBoot = enabled;
   }
 }
