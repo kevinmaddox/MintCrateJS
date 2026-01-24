@@ -5,6 +5,8 @@
 
 'use strict';
 
+import { Room } from "./room.js";
+
 import { SYSTEM_MEDIA_B64 } from "./img/b64.js";
 
 export class MintCrate {
@@ -45,6 +47,11 @@ export class MintCrate {
   #cameraBounds;
   #cameraIsBound;
   
+  #tilemapIsLoaded;
+  #tilemapFullName;
+  #tilemapName;
+  #layoutName;
+  
   #quickBoot;
   #showFps;
   #showRoomInfo;
@@ -59,8 +66,10 @@ export class MintCrate {
   #fpsFrameLast;  // Time snapshot logger for calculating FPS
   #frameCounter;  // Counts frames to calculate FPS
   
+  #ROOM_LIST;
   #STARTING_ROOM;
   #currentRoom;
+  #roomHasChanged;
   #isChangingRooms;
   
   #masterBgmVolume;
@@ -79,8 +88,9 @@ export class MintCrate {
   
   constructor(
     divTargetId,
-    baseWidth, baseHeight,
-    startingRoom,
+    baseWidth,
+    baseHeight,
+    roomList,
     screenScale = 1
   ) {
     // Initialize render canvases/contexts
@@ -102,12 +112,12 @@ export class MintCrate {
     
     // Paths for loading media resources
     this.#RES_PATHS = {
-      actives   : "res/actives/",
-      backdrops : "res/backdrops/",
-      fonts     : "res/fonts/",
-      music     : "res/music/",
-      sounds    : "res/sounds/",
-      tilemaps  : "res/tilemaps/"
+      actives   : "res/actives",
+      backdrops : "res/backdrops",
+      fonts     : "res/fonts",
+      music     : "res/music",
+      sounds    : "res/sounds",
+      tilemaps  : "res/tilemaps"
     };
     
     // Game's base pixel resolution
@@ -158,6 +168,12 @@ export class MintCrate {
     this.#cameraBounds  = {x1 : 0, x2 : 0, y1 : 0, y2 : 0};
     this.#cameraIsBound = false;
     
+    // Tilemap
+    this.#tilemapIsLoaded = false;
+    this.#tilemapFullName = "";
+    this.#tilemapName     = "";
+    this.#layoutName      = "";
+    
     // Debug functionality
     this.#quickBoot                = false;
     this.#showFps                  = false;
@@ -175,8 +191,13 @@ export class MintCrate {
     this.#fpsFrameLast  = 0;
     
     // Room/gamestate management
-    this.#STARTING_ROOM   = startingRoom;
+    this.#ROOM_LIST = {};
+    for (const room of roomList) {
+      this.#ROOM_LIST[room.name] = room;
+    }
+    this.#STARTING_ROOM   = roomList[0];
     this.#isChangingRooms = false;
+    this.#roomHasChanged = false;
     
     // Music/SFX global volume levels
     this.#masterBgmVolume = 1;
@@ -402,7 +423,7 @@ export class MintCrate {
     let promises = [];
     for (const item of this.#loadingQueue.backdrops ?? []) {
       // Load and store backdrop image
-      promises.push(this.#loadImage(`res_backdrops/${item.name}.png`)
+      promises.push(this.#loadImage(`${this.#RES_PATHS.backdrops}/${item.name}.png`)
         .then((img) =>
           this.#data.backdrops[item.name] = {
             img: this.#colorKeyImage(img),
@@ -432,12 +453,13 @@ export class MintCrate {
   
   #initDone() {
     console.log(this.#data);
+    console.log('Loading Complete!');
     this.#displayLoadingScreen('Loading Complete!');
     this.#loadingQueue = null;
     this.changeRoom(this.#STARTING_ROOM);
     
     if (this.#quickBoot) {
-      window.requestAnimationFrame(() => this.#gameLoop());
+      window.requestAnimationFrame(this.#gameLoop.bind(this));
     } else {
       // Wipe the screen after a moment
       setTimeout(() => {
@@ -447,7 +469,7 @@ export class MintCrate {
       
       // Pause for a further moment before starting the game
       setTimeout(
-        () => window.requestAnimationFrame(() => this.#gameLoop()),
+        () => window.requestAnimationFrame(this.#gameLoop.bind(this)),
         1500
       );
     }
@@ -457,8 +479,153 @@ export class MintCrate {
   // Room management
   // ---------------------------------------------------------------------------
   
-  changeRoom(room) {
-    this.room = new room(this);
+  changeRoom(room, options = {}) {
+    options.fadeMusic    = options.fadeMusic    ?? false;
+    options.persistAudio = options.persistAudio ?? false;
+    console.log('a', this.#isChangingRooms);
+    // Only change room if we're not currently transitioning to another one.
+    if (!this.#isChangingRooms) {
+      // Indicate we're now changing rooms.
+      this.#isChangingRooms = true;
+      console.log('b', this.#isChangingRooms);
+      
+      // Handle fade-out before changing room (if configured).
+      if (this.#currentRoom && this.#currentRoom.getRoomFadeInfo().fadeOutConfig.enabled) {
+        // Trigger the fade-out effect, then change room when it's done.
+        this.#triggerRoomFade('fadeOut', () => {
+            this.#performRoomChange(room, options.persistAudio)
+          },
+          options.fadeMusic
+        )
+      // Otherwise, simply change room.
+      } else {
+        this.#performRoomChange(room, options.persistAudio)
+      }
+      console.log('c', this.#isChangingRooms);
+    }
+  }
+  
+  #performRoomChange(room, persistAudio) {
+    // Wipe current entity instances
+    for (const key in this.#instances) {
+      this.#instances[key] = [];
+    }
+    
+    // Wipe draw-order tables
+    for (const key in this.#drawOrders) {
+      this.#drawOrders[key] = [];
+    }
+    
+    // Stop all audio
+    if (!persistAudio) {
+      this.stopAllSounds();
+      this.stopMusic();
+    }
+    
+    // Reset camera
+    this.#camera        = {x: 0, y: 0};
+    this.#cameraBounds  = {x1: 0, x2: 0, y1: 0, y2: 0};
+    this.#cameraIsBound = false;
+    
+    // Remove tilemap from scene
+    this.#tilemapFullName = "";
+    this.#tilemapName     = "";
+    this.#layoutName      = "";
+    
+    // Mark delayed/repeated functions to be cleared out
+    for (let i = 0; i < this.#queuedFunctions.length; i++) {
+      this.#queuedFunctions[i].cancelled = true;
+    }
+    
+    // Indicate we're done changing rooms
+    this.#isChangingRooms = false;
+    
+    // Create new room
+    let newRoom = new room(this, this.#ROOM_LIST);
+    
+    // Store reference to new room, but only if it's the last in a queue.
+    // This can happen if a room calls changeRoom() from its constructor.
+    // It's to avoid issues when the functions bubble up from being nested.
+    if (!this.#roomHasChanged) {
+      this.#currentRoom = newRoom;
+      this.#roomHasChanged = true;
+      
+      // Trigger fade in for fresh room (if configured)
+      if (this.#currentRoom.getRoomFadeInfo().fadeInConfig.enabled) {
+        this.#triggerRoomFade('fadeIn');
+      }
+    }
+  }
+  
+  #triggerRoomFade(fadeType, finishedCallback, fadeMusic) {
+    return;
+    // TODO: All this
+    /*
+    let fade = this.#currentRoom.getRoomFadeInfo();
+    
+    // Cancel any current fades
+    if (this.#fadeEffectFunc) {
+      this.clearFunction(this.#fadeEffectFunc)
+    }
+    
+    if (this.#fadeDoneFunc) {
+      this.clearFunction(this.#fadeDoneFunc)
+    }
+    
+    // Set the room's current fade type (used for rendering the fade overlay)
+    this._currentRoom._currentFade = fadeType
+    
+    // Get the configuration for this fade
+    local fadeConf = self._currentRoom._fadeConf[fadeType]
+    
+    // Set up function to handle fade-in/out
+    local fadeEffectFunc = function()
+      self._currentRoom._fadeLevel =
+        self._currentRoom._fadeLevel + fadeConf.fadeValue
+    end
+    
+    // Run it every frame, and store it in case we need to cancel it early
+    self:repeatFunction(fadeEffectFunc, 1)
+    self._currentRoom._fadeEffectFunc = fadeEffectFunc
+    
+    // Set up delayed function to clear fade-effect function when fade is done
+    local fadeDoneFunc = function()
+      -- Clear fade-effect function
+      self:clearFunction(fadeEffectFunc)
+      
+      -- Ensure fade overlay is either completely hidden or completely shown
+      if (fadeType == "fadeIn") then
+        self._currentRoom._fadeLevel = 100
+      else
+        self._currentRoom._fadeLevel = 0
+      end
+    end
+    
+    // Run it when fade's done, and store it in case we need to cancel it early
+    self:delayFunction(fadeDoneFunc, fadeConf.fadeFrames + fadeConf.pauseFrames)
+    self._currentRoom._fadeDoneFunc = fadeDoneFunc
+    
+    // Calculate how long until we need to wait until we execute the callback
+    // This value changes if we're in the midst of a fade-in
+    local totalDuration = fadeConf.fadeFrames
+    totalDuration       = totalDuration * (self._currentRoom._fadeLevel / 100)
+    totalDuration       = math.max(totalDuration, 0)
+    
+    // Fade music (if specified)
+    if (fadeMusic) then
+      self:stopMusic(totalDuration)
+    end
+    
+    // Set delayed function to execute when fade is finished
+    // This is currently only for fade-outs
+    if (finishedCallback) then
+      -- Include the pause frames so we don't run the function early
+      totalDuration = totalDuration + fadeConf.pauseFrames
+      
+      -- Execute callback
+      self:delayFunction(finishedCallback, totalDuration)
+    end
+    */
   }
   
   // ---------------------------------------------------------------------------
@@ -507,7 +674,13 @@ export class MintCrate {
   // Audio
   // ---------------------------------------------------------------------------
   
-  // TODO: This
+  stopAllSounds() {
+    
+  }
+  
+  stopMusic() {
+    
+  }
   
   // ---------------------------------------------------------------------------
   // Debugging
@@ -517,18 +690,26 @@ export class MintCrate {
     this.#quickBoot = enabled;
   }
   
+  setFpsVisibility(enabled) {
+    this.#showFps = enabled;
+  }
+  
+  setRoomInfoVisibility(enabled) {
+    this.#showRoomInfo = enabled;
+  }
+  
   // ---------------------------------------------------------------------------
   // Runtime
   // ---------------------------------------------------------------------------
   
   #gameLoop(fpsTimeNow) {
+    requestAnimationFrame(this.#gameLoop.bind(this));
+    
     this.#update(fpsTimeNow);
     this.#draw();
   }
   
   #update(fpsTimeNow) {
-    requestAnimationFrame(() => this.#gameLoop());
-    
     // Throttle FPS
     const delta = fpsTimeNow - this.#fpsTimeLast;
     
@@ -544,6 +725,12 @@ export class MintCrate {
       this.#frameCounter = 0;
       this.#fpsFrameLast = fpsTimeNow;
     }
+    
+    // Run room update code
+    this.#roomHasChanged = false;
+    if (this.#currentRoom && this.#currentRoom.update) {
+      this.#currentRoom.update();
+    }
   }
   
   //----------------------------------------------------------------------------
@@ -552,7 +739,8 @@ export class MintCrate {
   
   #clearCanvas() {
     if (this.#currentRoom) {
-      this.#backContext.fillStyle = this.#currentRoom.getBackgroundColor();
+      let rgb = this.#currentRoom.getRoomBackgroundColor();
+      this.#backContext.fillStyle = `rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
     } else {
       this.#backContext.fillStyle = 'black';
     }
@@ -577,6 +765,33 @@ export class MintCrate {
   #draw() {
     // Prepare canvas for rendering frame
     this.#clearCanvas();
+    
+    // Draw FPS debug overlay
+    this.#drawText(
+      [this.#currentFps.toString()],
+      this.#data.fonts['system_counter'],
+      this.#camera.x,
+      this.#camera.y
+    );
+    
+    // Draw debug info for current room
+    if (this.#showRoomInfo) {
+      this.#drawText(
+        [
+          this.#currentRoom.getRoomName(),
+          this.#currentRoom.getRoomWidth() +
+            " x " +
+            this.#currentRoom.getRoomHeight(),
+          "ACTS: " + this.#instances.actives.length,
+          "BAKS: " + this.#instances.backdrops.length,
+          "TEXT: " + this.#instances.paragraphs.length
+        ],
+        this.#data.fonts['system_counter'],
+        this.#camera.x,
+        this.#camera.y + this.#BASE_HEIGHT -
+          (5 * this.#data.fonts['system_counter'].charHeight)
+      );
+    }
     
     // Copy offscreen canvas to visible canvas
     this.#renderFrame();
