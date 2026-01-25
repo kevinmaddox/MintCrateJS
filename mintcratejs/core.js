@@ -467,9 +467,9 @@ export class MintCrate {
     console.log('Loading Complete!');
     this.#displayLoadingScreen('Loading Complete!');
     this.#loadingQueue = null;
-    this.changeRoom(this.#STARTING_ROOM);
     
     if (this.#quickBoot) {
+      this.changeRoom(this.#STARTING_ROOM);
       window.requestAnimationFrame(this.#gameLoop.bind(this));
     } else {
       // Wipe the screen after a moment
@@ -480,7 +480,10 @@ export class MintCrate {
       
       // Pause for a further moment before starting the game
       setTimeout(
-        () => window.requestAnimationFrame(this.#gameLoop.bind(this)),
+        () => {
+          this.changeRoom(this.#STARTING_ROOM);
+          window.requestAnimationFrame(this.#gameLoop.bind(this));
+        },
         1500
       );
     }
@@ -493,15 +496,17 @@ export class MintCrate {
   changeRoom(room, options = {}) {
     options.fadeMusic    = options.fadeMusic    ?? false;
     options.persistAudio = options.persistAudio ?? false;
-    console.log('a', this.#isChangingRooms);
+    
     // Only change room if we're not currently transitioning to another one.
     if (!this.#isChangingRooms) {
       // Indicate we're now changing rooms.
       this.#isChangingRooms = true;
-      console.log('b', this.#isChangingRooms);
       
       // Handle fade-out before changing room (if configured).
-      if (this.#currentRoom && this.#currentRoom.getRoomfadeConfig().fadeOut.enabled) {
+      if (
+        this.#currentRoom &&
+        this.#currentRoom.getRoomFadeConfig().fadeOut.enabled
+      ) {
         // Trigger the fade-out effect, then change room when it's done.
         this.#triggerRoomFade('fadeOut', () => {
             this.#performRoomChange(room, options.persistAudio)
@@ -512,7 +517,6 @@ export class MintCrate {
       } else {
         this.#performRoomChange(room, options.persistAudio)
       }
-      console.log('c', this.#isChangingRooms);
     }
   }
   
@@ -564,6 +568,8 @@ export class MintCrate {
       // Trigger fade in for fresh room (if configured)
       if (this.#currentRoom.getRoomFadeConfig().fadeIn.enabled) {
         this.#triggerRoomFade('fadeIn');
+      } else {
+        this.#fadeLevel = 100;
       }
     }
   }
@@ -589,18 +595,17 @@ export class MintCrate {
     
     // Set up function to handle the fade progression
     this.#fadeFunc = () => {
-      this.#fadeLevel += this.#fadeValue;
+      this.#fadeLevel +=
+        (fadeType === 'fadeIn') ? this.#fadeValue : -this.#fadeValue;
       
       if (
         (
-          fadeType === 'fadeIn'
-          &&
+          fadeType === 'fadeIn' &&
           this.#fadeLevel >= 100
         )
         ||
         (
-          fadeType === 'fadeOut'
-          &&
+          fadeType === 'fadeOut' &&
           this.#fadeLevel <= fadeOutMinimumLevel
         )
       ) {
