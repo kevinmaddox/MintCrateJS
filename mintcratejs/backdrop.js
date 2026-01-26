@@ -13,7 +13,6 @@ export class Backdrop extends Entity {
   // Member variables
   //----------------------------------------------------------------------------
   
-  #entityType;
   #name;
   #x;
   #y;
@@ -35,9 +34,8 @@ export class Backdrop extends Entity {
     width,
     height
   ) {
-    super(name, instances, linearInstanceList, drawOrder, x, y);
+    super("backdrop", name, instances, linearInstanceList, drawOrder, x, y);
     
-    this.#entityType = "backdrop";
     this.#width = width;
     this.#height = height;
   }

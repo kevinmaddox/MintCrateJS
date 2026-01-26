@@ -6,7 +6,8 @@
 'use strict';
 
 import { Room }     from "./room.js";
-import { Backdrop } from "./backdrop.js";
+import { EntityFactory }     from "./entityfactory.js";
+// import { Backdrop } from "./backdrop.js";
 import { MintUtil } from "./mintutil.js";
 
 import { SYSTEM_MEDIA_B64 } from "./img/b64.js";
@@ -73,6 +74,8 @@ export class MintCrate {
   #fpsFrameLast;  // Time snapshot logger for calculating FPS
   #frameCounter;  // Counts frames to calculate FPS
   
+  #entityCreator;
+  
   #ROOM_LIST;
   #STARTING_ROOM;
   #currentRoom;
@@ -86,11 +89,9 @@ export class MintCrate {
   #COLLIDER_SHAPES;
   #loadingQueue;
   #data;
-  actives;
-  backdrops;
-  paragraphs;
+  #instanceCollection;
   #tiles;
-  #linearInstanceList;
+  #linearInstanceLists;
   #drawOrders;
   
   //----------------------------------------------------------------------------
@@ -225,7 +226,7 @@ export class MintCrate {
     
     this.#loadingQueue = {};
     
-    this.#data = {
+    this.#data = { // TODO: Change to this.#definitions (after everything else)
       actives   : {},
       backdrops : {},
       fonts     : {},
@@ -234,20 +235,25 @@ export class MintCrate {
       music     : {}
     };
     
-    this.actives = {};
-    this.backdrops = {};
-    this.paragraphs = {};
     this.#tiles = [];
     
-    this.#linearInstanceList = {
+    this.#instanceCollection = {};
+    
+    this.#linearInstanceLists = {
       actives    : [],
       backdrops  : [],
       paragraphs : []
     }
     
     this.#drawOrders = {
-      backdrops : [],
-      main      : []
+      background : [],
+      foreground : []
+    };
+    
+    // Entity creation
+    this.#entityCreator = {
+      foreground: new EntityFactory(this.#instanceCollection, this.#linearInstanceLists, this.#drawOrders.foreground),
+      background: new EntityFactory(this.#instanceCollection, this.#linearInstanceLists, this.#drawOrders.background)
     };
     
     // Prepare canvas.
@@ -543,13 +549,11 @@ export class MintCrate {
   
   #performRoomChange(room, persistAudio) {
     // Wipe current entity instances
-    this.actives = {};
-    this.backdrops = {};
-    this.paragraphs = {};
+    this.#instanceCollection = {};
     
     // Wipe draw-order tables
     for (const key in this.#drawOrders) {
-      this.#drawOrders[key] = [];
+      this.#drawOrders[key].length = 0;
     }
     
     // Stop all audio
@@ -687,22 +691,12 @@ export class MintCrate {
   // Creating game objects
   // ---------------------------------------------------------------------------
   
-  addBackdrop(name, x, y, options = {}) {
-    let backdrop = new Backdrop(
-      name,
-      this.backdrops,
-      this.#linearInstanceList.backdrops,
-      this.#drawOrders.backdrops,
-      x,
-      y,
-      240,
-      172
-    );
-    
-    this.#linearInstanceList.backdrops.push(backdrop);
-    this.#drawOrders.backdrops.push(backdrop);
-    
-    return backdrop;
+  getEntityList() {
+    return this.#instanceCollection;
+  }
+  
+  getEntityCreator() {
+    return this.#entityCreator;
   }
   
   // ---------------------------------------------------------------------------
@@ -857,7 +851,11 @@ export class MintCrate {
     this.#clearCanvas();
     
     // Draw backdrops
-    for (const backdrop of this.#drawOrders.backdrops) {
+    for (const backdrop of this.#drawOrders.background) {
+      if (backdrop.getEntityType() !== 'backdrop') {
+        continue;
+      }
+      
       // If backdrops isn't visible, then skip drawing it
       if (!backdrop.isVisible() || backdrop.getOpacity() === 0) {
         continue;
@@ -921,9 +919,9 @@ export class MintCrate {
           this.#currentRoom.getRoomWidth() +
             " x " +
             this.#currentRoom.getRoomHeight(),
-          "ACTS: " + this.#linearInstanceList.actives.length,
-          "BAKS: " + this.#linearInstanceList.backdrops.length,
-          "TEXT: " + this.#linearInstanceList.paragraphs.length
+          "ACTS: " + this.#linearInstanceLists.actives.length,
+          "BAKS: " + this.#linearInstanceLists.backdrops.length,
+          "TEXT: " + this.#linearInstanceLists.paragraphs.length
         ],
         this.#data.fonts['system_counter'],
         this.#camera.x,

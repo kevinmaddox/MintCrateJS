@@ -14,6 +14,7 @@ export class Entity {
   // Private variables
   //----------------------------------------------------------------------------
   
+  #entityType;
   #name;
   
   #instances;
@@ -31,7 +32,8 @@ export class Entity {
   // Constructor
   //----------------------------------------------------------------------------
   
-  constructor(name, instances, linearInstanceList, drawOrder, x, y) {
+  constructor(entityType, name, instances, linearInstanceList, drawOrder, x, y) {
+    this.#entityType = entityType;
     this.#name = name;
     
     this.#instances = instances;
@@ -71,6 +73,10 @@ export class Entity {
   
   getName() {
     return this.#name;
+  }
+  
+  getEntityType() {
+    return this.#entityType;
   }
   
   // ---------------------------------------------------------------------------
