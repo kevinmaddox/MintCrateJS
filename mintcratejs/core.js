@@ -5,10 +5,10 @@
 
 'use strict';
 
-import { Room }     from "./room.js";
-import { EntityFactory }     from "./entityfactory.js";
-// import { Backdrop } from "./backdrop.js";
-import { MintUtil } from "./mintutil.js";
+import { InputHandler }  from "./inputhandler.js";
+import { EntityFactory } from "./entityfactory.js";
+import { MintUtil }      from "./mintutil.js";
+import { MintMath }      from "./mintmath.js";
 
 import { SYSTEM_MEDIA_B64 } from "./img/b64.js";
 
@@ -82,8 +82,9 @@ export class MintCrate {
   #ROOM_LIST;
   #STARTING_ROOM;
   #currentRoom;
-  #roomHasChanged;
+  #roomData;
   #isChangingRooms;
+  #roomHasChanged;
   
   #masterBgmVolume;
   #masterSfxVolume;
@@ -114,6 +115,7 @@ export class MintCrate {
       event => event.preventDefault());
     this.#frontCanvas.width = baseWidth;
     this.#frontCanvas.height = baseHeight;
+    this.#frontCanvas.tabIndex = 1;
     
     this.#frontContext = this.#frontCanvas.getContext('2d');
     this.#frontContext.imageSmoothingEnabled = false;
@@ -159,8 +161,8 @@ export class MintCrate {
     // Used for keeping track of keyboard data
     this.#keyStates     = {};
     
-    // document.addEventListener('keydown', (e) => Inu.#keyboardHandler(e), false);
-    // document.addEventListener('keyup',   (e) => Inu.#keyboardHandler(e), false);
+    document.addEventListener('keydown', (e) => this.#keyHandler(e), false);
+    document.addEventListener('keyup',   (e) => this.#keyHandler(e), false);
     
     // Used for keeping track of mouse data
     this.#mouseStates = {};
@@ -184,7 +186,8 @@ export class MintCrate {
     this.#cameraIsBound = false;
     
     // Tilemap
-    this.#tilemapIsSet = false;
+    this.#tilemapIsSet    = false;
+    this.#tilemapFullName = "";
     this.#tilemapName     = "";
     this.#layoutName      = "";
     
@@ -219,6 +222,7 @@ export class MintCrate {
       this.#ROOM_LIST[room.name] = room;
     }
     this.#STARTING_ROOM   = roomList[0];
+    this.#roomData = {};
     this.#isChangingRooms = false;
     this.#roomHasChanged = false;
     
@@ -261,6 +265,13 @@ export class MintCrate {
       foreground: new EntityFactory(this.#data, this.#instanceCollection, this.#linearInstanceLists, this.#drawOrders.foreground),
       background: new EntityFactory(this.#data, this.#instanceCollection, this.#linearInstanceLists, this.#drawOrders.background)
     };
+    
+    // Aliases for easy user access
+    this.obj      = this.#instanceCollection;
+    this.bg       = this.#entityCreator.background;
+    this.fg       = this.#entityCreator.foreground;
+    this.roomList = this.#ROOM_LIST;
+    this.inputs   = this.#inputHandlers;
     
     // Prepare canvas.
     this.#clearCanvas();
@@ -722,7 +733,7 @@ export class MintCrate {
       // Handle fade-out before changing room (if configured).
       if (
         this.#currentRoom &&
-        this.#currentRoom.getRoomFadeConfig().fadeOut.enabled
+        this.#roomData.fadeOutConfig.enabled
       ) {
         // Trigger the fade-out effect, then change room when it's done.
         this.#triggerRoomFade('fadeOut', () => {
@@ -740,6 +751,9 @@ export class MintCrate {
   #performRoomChange(room, persistAudio) {
     // Wipe current entity instances
     this.#instanceCollection = {};
+    for (const key in this.#linearInstanceLists) {
+      this.#linearInstanceLists[key].length = 0;
+    }
     
     // Wipe draw-order tables
     for (const key in this.#drawOrders) {
@@ -758,6 +772,7 @@ export class MintCrate {
     this.#cameraIsBound = false;
     
     // Remove tilemap from scene
+    this.#tilemapIsSet = false;
     this.#tilemapFullName = "";
     this.#tilemapName     = "";
     this.#layoutName      = "";
@@ -771,7 +786,18 @@ export class MintCrate {
     this.#isChangingRooms = false;
     
     // Create new room
-    let newRoom = new room(this);
+    let newRoom = new room();
+    
+    this.#roomData = {
+      name            : newRoom.constructor.name,
+      width           : this.#BASE_WIDTH,
+      height          : this.#BASE_HEIGHT,
+      backgroundColor : {r: 0, g: 0, b: 0},
+      fadeInConfig    : {enabled: false},
+      fadeOutConfig   : {enabled: false}
+    };
+    
+    newRoom.load(this);
     
     // Store reference to new room, but only if it's the last in a queue.
     // This can happen if a room calls changeRoom() from its constructor.
@@ -781,7 +807,7 @@ export class MintCrate {
       this.#roomHasChanged = true;
       
       // Trigger fade in for fresh room (if configured)
-      if (this.#currentRoom.getRoomFadeConfig().fadeIn.enabled) {
+      if (this.#roomData.fadeInConfig.enabled) {
         this.#triggerRoomFade('fadeIn');
       } else {
         this.#fadeLevel = 100;
@@ -792,7 +818,9 @@ export class MintCrate {
   #triggerRoomFade(fadeType, finishedCallback, fadeMusic) {
     
     // Cancel fade-in if it's in progress
-    let fadeConfig = this.#currentRoom.getRoomFadeConfig()[fadeType];
+    let fadeConfig = (fadeType === "fadeIn")
+      ? this.#roomData.fadeInConfig
+      : this.#roomData.fadeOutConfig;
     
     // Calculate rate of change for the fade overlay opacity
     this.#fadeValue = 100 / fadeConfig.fadeLength;
@@ -843,8 +871,46 @@ export class MintCrate {
     }
   }
   
-  getRoomList() {
-    return this.#ROOM_LIST;
+  getRoomWidth() {
+    return this.#roomData.width;
+  }
+  
+  getRoomHeight() {
+    return this.#roomData.height;
+  }
+  
+  setRoomDimensions(width, height) {
+    // Set room dimensions
+    this.#roomData.width = width;
+    this.#roomData.height = height;
+  }
+  
+  configureRoomFadeIn(fadeLength, pauseLength = 0, color = {r: 0, g: 0, b: 0}) {
+    this.#roomData.fadeInConfig = {
+      enabled    : true,
+      fadeLength : fadeLength,
+      pauseLength: pauseLength,
+      fadeColor  : {r: color.r, g: color.g, b: color.b}
+    };
+  }
+  
+  configureRoomFadeOut(fadeLength, pauseLength = 0, color = {r: 0, g: 0, b: 0}) {
+    this.#roomData.fadeOutConfig = {
+      enabled    : true,
+      fadeLength : fadeLength,
+      pauseLength: pauseLength,
+      fadeColor  : {r: color.r, g: color.g, b: color.b}
+    };
+  }
+  
+  setRoomBackgroundColor(r, g, b) {
+    // Constrain color values
+    r = MintMath.clamp(r, 0, 255);
+    g = MintMath.clamp(g, 0, 255);
+    b = MintMath.clamp(b, 0, 255);
+    
+    // Set background clear color
+    this.#roomData.backgroundColor = {r: r, g: g, b: b};
   }
   
   // ---------------------------------------------------------------------------
@@ -885,19 +951,105 @@ export class MintCrate {
   // Game object management
   // ---------------------------------------------------------------------------
   
-  getEntityList() {
-    return this.#instanceCollection;
-  }
-  
-  getEntityCreator() {
-    return this.#entityCreator;
-  }
+  // TODO: This?
   
   // ---------------------------------------------------------------------------
   // Camera management
   // ---------------------------------------------------------------------------
   
-  // TODO: This
+  getCameraX() {
+    return this.#camera.x;
+  }
+  
+  getCameraY() {
+    return this.camera.y;
+  }
+  
+  setCameraX(x) {
+    // Figure out camera bounds
+    let x1;
+    let x2;
+    
+    if (!this.#cameraIsBound) {
+      x1 = 0;
+      x2 = this.#roomData.width;
+    } else {
+      x1 = this.#cameraBounds.x1;
+      x2 = this.#cameraBounds.x2;
+    }
+    
+    // Bind camera
+    let boundX = x;
+    boundX     = Math.max(boundX, x1);
+    boundX     = Math.min(boundX, x2 - this.#BASE_WIDTH);
+    
+    // Reposition camera
+    this.#camera.x = boundX;
+  }
+  
+  setCameraY(y) {
+    // Figure out camera bounds
+    let y1;
+    let y2;
+    
+    if (!this.#cameraIsBound) {
+      y1 = 0;
+      y2 = this.#roomData.height;
+    } else{
+      y1 = this.#cameraBounds.y1;
+      y2 = this.#cameraBounds.y2;
+    }
+    
+    // Bind camera
+    let boundY = y;
+    boundY     = Math.max(boundY, y1);
+    boundY     = Math.min(boundY, y2 - this.#BASE_HEIGHT);
+    
+    // Reposition camera
+    this.#camera.y = boundY;
+  }
+  
+  centerCameraX(x) {
+    this.setCameraX(x - (this.#BASE_WIDTH / 2));
+  }
+  
+  centerCameraY(y) {
+    this.setCameraY(y - (this.#BASE_HEIGHT / 2));
+  }
+  
+  moveCameraX(pixels) {
+    this.setCameraX(this.#camera.x + pixels);
+  }
+  
+  moveCameraY(pixels) {
+    this.setCameraY(this.#camera.y + pixels);
+  }
+  
+  bindCamera(x1, y1, x2, y2) {
+    // Set bounds
+    this.#cameraBounds = {
+      x1 : x1,
+      y1 : y1,
+      x2 : x2,
+      y2 : y2
+    };
+    
+    // Indicate that the camera is currently bound
+    this.#cameraIsBound = true;
+  }
+  
+  unbindCamera() {
+    // Unset bounds
+    this.#cameraBounds = {
+      x1 : 0,
+      x2 : 0,
+      y1 : 0,
+      y2 : 0
+    };
+    
+    // Indicate that the camera is currently unbound
+    this.#cameraIsBound = false;
+  }
   
   // ---------------------------------------------------------------------------
   // Managing tilemaps
@@ -935,7 +1087,39 @@ export class MintCrate {
   // Keyboard input
   //----------------------------------------------------------------------------
   
-  // TODO: This
+  #keyHandler(e) {
+    if (
+      !this.#gameHasFocus()
+      || (e.ctrlKey && (e.key === 'r' || e.key === 'R'))
+    ) {
+      return;
+    }
+    
+    e.preventDefault();
+    
+    if (event.repeat) {
+      return;
+    }
+    
+    // Create new entry in keystate list if key hasn't been pressed previously
+    if (!this.#keyStates[e.code]) {
+      this.#keyStates[e.code] = {pressed: false, released: false, held: false};
+    }
+    
+    if (event.type === 'keydown') {
+      // Indicate that key was just pressed and is being held
+      this.#keyStates[e.code].pressed = true;
+      this.#keyStates[e.code].held    = true;
+    } else {
+      // Indicate that key was just released and is not being held
+      this.#keyStates[e.code].released = true;
+      this.#keyStates[e.code].held     = false;
+    }
+  }
+  
+  addInputHandler() {
+    this.#inputHandlers.push(new InputHandler());
+  }
   
   // ---------------------------------------------------------------------------
   // Audio
@@ -1001,6 +1185,10 @@ export class MintCrate {
   // Runtime
   // ---------------------------------------------------------------------------
   
+  #gameHasFocus() {
+    return (document.activeElement === this.#frontCanvas);
+  }
+  
   #gameLoop(fpsTimeNow) {
     requestAnimationFrame(this.#gameLoop.bind(this));
     
@@ -1023,6 +1211,15 @@ export class MintCrate {
       this.#currentFps = this.#frameCounter;
       this.#frameCounter = 0;
       this.#fpsFrameLast = fpsTimeNow;
+    }
+    
+    if (!this.#gameHasFocus()) {
+      return;
+    }
+    
+    // Update inputs
+    for (const inputHandler of this.#inputHandlers) {
+      inputHandler._update(this.#keyStates);
     }
     
     // Handle delayed/repeated functions
@@ -1063,7 +1260,7 @@ export class MintCrate {
   
   #clearCanvas() {
     if (this.#currentRoom) {
-      let rgb = this.#currentRoom.getRoomBackgroundColor();
+      let rgb = this.#roomData.backgroundColor;
       this.#backContext.fillStyle = MintUtil.rgbToString(rgb.r, rgb.g, rgb.b);
     } else {
       this.#backContext.fillStyle = 'black';
@@ -1205,26 +1402,44 @@ export class MintCrate {
     this.#drawText(
       [this.#currentFps.toString()],
       this.#data.fonts['system_counter'],
-      this.#camera.x,
-      this.#camera.y
+      0,
+      0
     );
     
     // Draw debug info for current room
     if (this.#showRoomInfo) {
       this.#drawText(
         [
-          this.#currentRoom.getRoomName(),
-          this.#currentRoom.getRoomWidth() +
+          this.#roomData.name,
+          this.#roomData.width +
             " x " +
-            this.#currentRoom.getRoomHeight(),
+            this.#roomData.height,
           "ACTS: " + this.#linearInstanceLists.actives.length,
           "BAKS: " + this.#linearInstanceLists.backdrops.length,
           "TEXT: " + this.#linearInstanceLists.paragraphs.length
         ],
         this.#data.fonts['system_counter'],
-        this.#camera.x,
-        this.#camera.y + this.#BASE_HEIGHT -
-          (5 * this.#data.fonts['system_counter'].charHeight)
+        0,
+        this.#BASE_HEIGHT - (5 * this.#data.fonts['system_counter'].charHeight)
+      );
+    }
+    
+    // Draw overlay if game has lost focus
+    if (!this.#gameHasFocus()) {
+      this.#backContext.fillStyle = 'rgb(0 0 0 / 50%)';
+      this.#backContext.fillRect(0, 0, this.#BASE_WIDTH, this.#BASE_HEIGHT);
+      let font = this.#data.fonts['system_dialog'];
+      this.#drawText(
+        [
+          'MINTCRATE',
+          'Paused',
+          'Please click the screen to resume playing'
+        ],
+        font,
+        (this.#BASE_WIDTH  / 2),
+        (this.#BASE_HEIGHT / 2) - (font.charHeight * 2),
+        font.charHeight,
+        'center'
       );
     }
     
@@ -1257,10 +1472,16 @@ export class MintCrate {
         
         // Draw backdrop image
         if (!isMosaic && !isNinePatch) {
-          this.#backContext.drawImage(img, entity.getX(), entity.getY(), entity.getWidth(), entity.getHeight());
+          this.#backContext.drawImage(
+            img,
+            entity.getX() - this.#camera.x,
+            entity.getY() - this.#camera.y,
+            entity.getWidth(),
+            entity.getHeight()
+          );
         } else if (isMosaic) {
           this.#backContext.fillStyle = this.#data.backdrops[entity.getName() + '_mosaic'];
-          this.#backContext.translate(entity.getX(), entity.getY());
+          this.#backContext.translate(entity.getX() - this.#camera.x, entity.getY() - this.#camera.y);
           this.#backContext.fillRect(0, 0, 300, 300);
           this.#backContext.setTransform(1, 0, 0, 1, 0, 0);
         } else if (isNinePatch) {
@@ -1273,8 +1494,8 @@ export class MintCrate {
         this.#drawText(
           entity.getTextLines(),
           this.#data.fonts[entity.getName()],
-          entity.getX(),
-          entity.getY(),
+          entity.getX() - this.#camera.x,
+          entity.getY() - this.#camera.y,
           entity.getLineSpacing(),
           entity.getAlignment()
         );

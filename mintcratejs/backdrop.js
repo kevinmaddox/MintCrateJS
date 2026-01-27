@@ -3,6 +3,8 @@
 // A static entity intended for background visuals
 // ---------------------------------------------------------------------------
 
+// TODO: Add mosaic feature where you can scroll the background without moving it
+
 'use strict';
 
 import { Entity } from "./entity.js";
