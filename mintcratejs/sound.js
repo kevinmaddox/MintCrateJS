@@ -30,7 +30,7 @@ export class Sound {
   #hasEnded;
   
   #totalTimeElapsed;
-  #startedTimestamp;
+  #lastTimestamp;
   
   //----------------------------------------------------------------------------
   // Constructor
@@ -43,13 +43,14 @@ export class Sound {
     this.#hasEnded = false;
     
     this.#totalTimeElapsed = 0;
-    this.#startedTimestamp = 0;
+    this.#lastTimestamp = 0;
     
     this.#state = Sound.PLAYBACK_STATES.STOPPED;
   }
   
   play(volume, pitch, loopData) {
     this.#hasEnded = false;
+    
     this.#totalTimeElapsed = 0;
     
     this.#play(volume, pitch, loopData, 0);
@@ -71,8 +72,8 @@ export class Sound {
       return;
     }
     
-    
-    let timeElapsed = this.#audioContext.currentTime - this.#startedTimestamp;
+    let timeElapsed = this.#audioContext.currentTime - this.#lastTimestamp;
+    timeElapsed *= this.#sourceNode.playbackRate.value;
     this.#totalTimeElapsed += timeElapsed;
     
     this.#cleanUp();
@@ -108,7 +109,9 @@ export class Sound {
     this.setVolume(volume);
     
     // Set pitch
-    this.setPitch(pitch);
+    // TODO: Test these values
+    pitch = MintMath.clamp(pitch, 0.1, 30);
+    this.#sourceNode.playbackRate.value = pitch;
     
     // Set looping properties
     this.#sourceNode.loop      = loopData.enabled;
@@ -124,13 +127,16 @@ export class Sound {
     };
     this.#sourceNode.addEventListener('ended', this.#endCallback);
     
-    // Play sound
+    // Connect control nodes
     this.#sourceNode.connect(this.#gainNode);
     this.#gainNode.connect(this.#audioContext.destination);
-    this.#sourceNode.start(0, startOffset);
     
     // Store timestamp at which point this sound started playing
-    this.#startedTimestamp = this.#audioContext.currentTime;
+    this.#lastTimestamp = this.#audioContext.currentTime;
+    
+    // Play sound
+    this.#sourceNode.start(0, startOffset);
+    
   }
   
   isPaused() {
@@ -153,6 +159,16 @@ export class Sound {
   setPitch(pitch) {
     // TODO: Test these values
     pitch = MintMath.clamp(pitch, 0.1, 30);
+    
+    
+    if (this.#state === Sound.PLAYBACK_STATES.PLAYING) {
+      let timeElapsed = this.#audioContext.currentTime - this.#lastTimestamp;
+      timeElapsed *= this.#sourceNode.playbackRate.value;
+      this.#totalTimeElapsed += timeElapsed;
+      
+      this.#lastTimestamp = this.#audioContext.currentTime;
+      
+    }
     
     if (this.#sourceNode) {
       this.#sourceNode.playbackRate.value = pitch;

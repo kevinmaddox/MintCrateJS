@@ -1276,18 +1276,15 @@ export class MintCrate {
     
     // State 01
     if (!this.#musicTrackIsLoaded()) {
-      console.log('a');
       this.#startMusicPlayback(trackName, fadeLength);
     
     // State 02
     } else if (this.#currentMusicTrackName !== trackName) {
-      console.log('b');
       this.#stopMusicPlayback(this.#currentMusicTrackName, fadeLength);
       this.#startMusicPlayback(trackName, fadeLength);
     
     // State 03 & State 04
     } else {
-      console.log('c');
       this.#stopMusicPlayback(this.#currentMusicTrackName, 0);
       this.#startMusicPlayback(trackName, fadeLength);
     }
@@ -1333,7 +1330,6 @@ export class MintCrate {
     let affectingFadeValue = (fadeLength > 0) ? (1 / fadeLength) : 0;
     
     let track = this.#data.music[trackName];
-    console.log(track.loop);
     
     if (fadeLength === 0) {
       track.fade.remainingFrames = 0;
@@ -1490,7 +1486,7 @@ export class MintCrate {
   #onPageFocusLost() {
     this.#pageHasFocus = !document.hidden;
     
-    if (!this.#pageHasFocus) {
+    if (!this.#pageHasFocus && typeof this.#audioContext !== 'undefined') {
       this.#audioContext.suspend();
     } else if (this.#gameHasFocus()) {
       this.#audioContext.resume();
@@ -1534,7 +1530,7 @@ export class MintCrate {
     }
     
     // Halt further update processing if game has lost focus
-    if (!this.#gameHasFocus() && !this.#devMode) {
+    if (!this.#gameHasFocus()) {
       this.#audioContext.suspend();
       return;
     }
@@ -1561,18 +1557,10 @@ export class MintCrate {
     for (const trackName in this.#data.music) {
       let track = this.#data.music[trackName];
       
-      // Skip further music processing if track is paused
-      // TODO: Is there a point to this??
-      // if (track.source.isPaused()) {
-        // continue;
-      // }
-      
       // Handle music fades
       if (track.fade.remainingFrames > 0) {
-        // console.log(track.fade.remainingFrames, track.fade.affectingValue, track.relativeVolume);
         // Tick fade counter
         track.fade.remainingFrames--;
-        // console.log(track.fade.remainingFrames);
         
         // Handle fade-ins
         if (track.fade.type === this.#MUSIC_FADE_TYPES.IN) {
@@ -1610,16 +1598,12 @@ export class MintCrate {
             
             // Pause/stop the sound source if fade is done
             if (track.state === this.#MUSIC_STATES.PAUSING) {
-              console.log('1');
               track.source.pause();
               track.state = this.#MUSIC_STATES.PAUSED;
             } else if (track.state === this.#MUSIC_STATES.STOPPING) {
-              console.log('2');
               track.source.stop();
               track.state = this.#MUSIC_STATES.STOPPED;
             }
-            
-            console.log('done');
           }
         }
       }
@@ -1828,7 +1812,7 @@ export class MintCrate {
     }
     
     // Draw overlay if game has lost focus
-    if (!this.#gameHasFocus() && !this.#devMode) {
+    if (!this.#gameHasFocus()) {
       this.#backContext.fillStyle = 'rgb(0 0 0 / 50%)';
       this.#backContext.fillRect(0, 0, this.#BASE_WIDTH, this.#BASE_HEIGHT);
       let font = this.#data.fonts['system_dialog'];
