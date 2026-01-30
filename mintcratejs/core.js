@@ -19,6 +19,8 @@ export class MintCrate {
   // Member variables
   //----------------------------------------------------------------------------
   
+  #pageHasFocus;
+  
   #frontCanvas;
   #frontContext;
   #backCanvas;
@@ -89,9 +91,11 @@ export class MintCrate {
   
   #audioContext;
   #MUSIC_FADE_TYPES;
+  #MUSIC_STATES;
   #masterVolume;
   #masterBgmPitch;
   #currentMusicTrackName;
+  #systemAudioHalted
   
   #COLLIDER_SHAPES;
   #loadingQueue;
@@ -112,6 +116,14 @@ export class MintCrate {
     roomList,
     options = {}
   ) {
+    // Listen for lost page focus so that we can pause the game
+    this.#pageHasFocus = true;
+    document.addEventListener(
+      "visibilitychange", 
+      () => { this.#onPageFocusLost(); },
+      false
+    );
+    
     // Default options
     options.screenScale = options.screenScale ?? 1;
     options.devMode     = options.devMode ?? false;
@@ -234,12 +246,14 @@ export class MintCrate {
     
     // Music/SFX global volume levels
     this.#MUSIC_FADE_TYPES = {IN: 0, OUT: 1};
+    this.#MUSIC_STATES = {PLAYING: 0, PAUSING: 1, PAUSED: 2, STOPPING: 3, STOPPED: 4};
     this.#masterVolume = {
       bgm: 1,
       sfx: 1
     };
     this.#masterBgmPitch  = 1;
     this.#currentMusicTrackName = "";
+    this.#systemAudioHalted = false;
     
     // Game data
     this.#COLLIDER_SHAPES = {NONE: 0, RECTANGLE: 1, CIRCLE: 2};
@@ -568,7 +582,8 @@ export class MintCrate {
         .then((audioBuffer) => {
           this.#data.sounds[item.name] = {
             source: new Sound(this.#audioContext, audioBuffer),
-            relativeVolume: 1
+            lastVolume: 1,
+            lastPitch: 1
           };
         });
         // .then((audioBuffer) => this.#data.sounds[item.name] = audioBuffer);
@@ -599,10 +614,16 @@ export class MintCrate {
           this.#data.music[item.name] = {
             source: new Sound(this.#audioContext, audioBuffer),
             relativeVolume: 0,
+            state: this.#MUSIC_STATES.STOPPED,
             fade: {
               type: this.#MUSIC_FADE_TYPES.IN,
               remainingFrames: 0,
               affectingValue: 0
+            },
+            loop: {
+              enabled : item.loop      ?? false,
+              start   : item.loopStart ?? 0,
+              end     : item.loopEnd   ?? audioBuffer.duration
             }
           };
         });
@@ -615,7 +636,7 @@ export class MintCrate {
     Promise.allSettled(promises).then((results) => {
       if (this.#initFailed(results))
         return;
-      
+      console.log(this.#data.music);
       this.#initDone();
     });
   }
@@ -1210,6 +1231,9 @@ export class MintCrate {
   // Audio
   // ---------------------------------------------------------------------------
   
+  // TODO: Change Music -> BGM and Sound -> SFX?
+  // playBgm(), playSfx, setBgmVolume, etc.
+  
   playSound(soundName, options = {}) {
     // Default params
     options.volume = options.volume ?? 1;
@@ -1218,11 +1242,12 @@ export class MintCrate {
     // Get sound data
     let sound = this.#data.sounds[soundName];
     
-    // Store relative volume
-    sound.relativeVolume = options.volume;
+    // Store volume & pitch in case we need to system halt/resume audio
+    sound.lastVolume = options.volume;
+    sound.lastPitch  = options.pitch;
     
     // Play sound
-    sound.source.play(options.volume, options.pitch);
+    sound.source.play(options.volume * this.#masterVolume.sfx, options.pitch, {enabled: false});
   }
   
   stopAllSounds() {
@@ -1235,10 +1260,6 @@ export class MintCrate {
   
   // https://github.com/WebAudio/web-audio-api-v2/issues/105
   playMusic(trackName, fadeLength = 0) {
-    this.#data.music[trackName].source.play(1, 1);
-    this.#currentMusicTrackName = trackName;
-    return;
-    
     /*
       01. No track is playing at all
         -> Play the new track
@@ -1255,17 +1276,20 @@ export class MintCrate {
     
     // State 01
     if (!this.#musicTrackIsLoaded()) {
-      this.#playNewMusicTrack(trackName, fadeLength);
+      console.log('a');
+      this.#startMusicPlayback(trackName, fadeLength);
     
     // State 02
     } else if (this.#currentMusicTrackName !== trackName) {
-      this.#stopCurrentMusicTrack(fadeLength);
-      this.#playNewMusicTrack(trackName, fadeLength);
+      console.log('b');
+      this.#stopMusicPlayback(this.#currentMusicTrackName, fadeLength);
+      this.#startMusicPlayback(trackName, fadeLength);
     
     // State 03 & State 04
     } else {
-      this.#stopCurrentMusicTrack(0);
-      this.#playNewMusicTrack(trackName, fadeLength);
+      console.log('c');
+      this.#stopMusicPlayback(this.#currentMusicTrackName, 0);
+      this.#startMusicPlayback(trackName, fadeLength);
     }
     
     // Store the music track name
@@ -1273,68 +1297,142 @@ export class MintCrate {
   }
   
   stopMusic(fadeLength = 0) {
-    console.log(this.#currentMusicTrackName);
-    console.log(this.#data.music[this.#currentMusicTrackName]);
-    if (this.#data.music[this.#currentMusicTrackName])
-      this.#data.music[this.#currentMusicTrackName].source.stop();
-    return;
-    
     if (this.#musicTrackIsLoaded()) {
-      let currentTrack = this.#data.music[this.#currentMusicTrackName];
-      this.#stopCurrentMusicTrack(fadeLength);
+      this.#stopMusicPlayback(this.#currentMusicTrackName, fadeLength);
+      this.#currentMusicTrackName = "";
     }
   }
   
   pauseMusic(fadeLength = 0) {
-    if (this.#data.music[this.#currentMusicTrackName])
-      this.#data.music[this.#currentMusicTrackName].source.pause();
-    return;
+    let track = this.#data.music[this.#currentMusicTrackName];
     
-    let currentTrack = this.#data.music[this.#currentMusicTrackName];
-    currentTrack.source.pause();
+    if (this.#musicTrackIsLoaded()) {
+      if (
+        track.state !== this.#MUSIC_STATES.PAUSING
+        || track.state !== this.#MUSIC_STATES.PAUSED
+      ) {
+        this.#stopMusicPlayback(this.#currentMusicTrackName, fadeLength, true);
+      }
+    }
   }
   
   resumeMusic(fadeLength = 0) {
-    if (this.#data.music[this.#currentMusicTrackName])
-      this.#data.music[this.#currentMusicTrackName].source.resume(1, 1);
-    return;
-    
-    this.#playNewMusicTrack(this.#currentMusicTrackName, fadeLength);
-  }
-  
-  #playNewMusicTrack(trackName, fadeLength) {
-    let affectingFadeValue = (fadeLength > 0) ? (1 / fadeLength) : 0;
-    
-    if (fadeLength === 0) {
-      let newTrack = this.#data.music[trackName];
-      newTrack.source.play();
-    } else {
-      // Play new track
-      let newTrack = this.#data.music[trackName];
+    if (this.#musicTrackIsLoaded()) {
+      let track = this.#data.music[this.#currentMusicTrackName];
       
-      newTrack.relativeVolume = 0;
-      newTrack.fade.type            = this.#MUSIC_FADE_TYPES.IN;
-      newTrack.fade.remainingFrames = fadeLength;
-      newTrack.fade.affectingValue  = affectingFadeValue;
-      
-      newTrack.source.play();
+      if (
+        track.state === this.#MUSIC_STATES.PAUSING
+        || track.state === this.#MUSIC_STATES.PAUSED
+      ) {
+        this.#startMusicPlayback(this.#currentMusicTrackName, fadeLength, true);
+      }
     }
   }
   
-  #stopCurrentMusicTrack(fadeLength) {
+  #startMusicPlayback(trackName, fadeLength, isResuming) {
     let affectingFadeValue = (fadeLength > 0) ? (1 / fadeLength) : 0;
     
+    let track = this.#data.music[trackName];
+    console.log(track.loop);
+    
     if (fadeLength === 0) {
-      let currentTrack = this.#data.music[this.#currentMusicTrackName];
-      currentTrack.source.stop();
-      this.#currentMusicTrackName = "";
-    } else {
-      let currentTrack = this.#data.music[this.#currentMusicTrackName];
+      track.fade.remainingFrames = 0;
+      track.relativeVolume = 1;
       
-      currentTrack.fade.type            = this.#MUSIC_FADE_TYPES.OUT;
-      currentTrack.fade.remainingFrames = fadeLength;
-      currentTrack.fade.affectingValue  = affectingFadeValue;
+      if (isResuming) {
+        track.source.resume(this.#masterVolume.bgm, this.#masterBgmPitch, track.loop);
+      } else {
+        track.source.play(this.#masterVolume.bgm, this.#masterBgmPitch, track.loop);
+      }
+    } else {
+      if (!isResuming) {
+        track.relativeVolume       = 0;
+      }
+      track.fade.type            = this.#MUSIC_FADE_TYPES.IN;
+      track.fade.remainingFrames = fadeLength;
+      track.fade.affectingValue  = affectingFadeValue;
+      
+      if (isResuming) {
+        track.source.resume(0, this.#masterBgmPitch, track.loop);
+      } else {
+        track.source.play(0, this.#masterBgmPitch, track.loop);
+      }
     }
+    
+    track.state = this.#MUSIC_STATES.PLAYING;
+  }
+  
+  #stopMusicPlayback(trackName, fadeLength, isPausing) {
+    let affectingFadeValue = (fadeLength > 0) ? (1 / fadeLength) : 0;
+    
+    let track = this.#data.music[this.#currentMusicTrackName];
+    
+    if (fadeLength === 0) {
+      track.fade.remainingFrames = 0;
+      
+      if (isPausing) {
+        track.state = this.#MUSIC_STATES.PAUSED;
+        track.source.pause();
+      } else {
+        track.state = this.#MUSIC_STATES.STOPPED;
+        track.source.stop();
+      }
+    } else {
+      track.fade.type            = this.#MUSIC_FADE_TYPES.OUT;
+      track.fade.remainingFrames = fadeLength;
+      track.fade.affectingValue  = affectingFadeValue;
+      
+      track.state = (isPausing)
+        ? this.#MUSIC_STATES.PAUSING
+        : this.#MUSIC_STATES.STOPPING;
+    }
+  }
+  
+  setMusicVolume(newVolume) {
+    // Constrain volume value
+    newVolume = MintMath.clamp(newVolume, 0, 1);
+    
+    // Set all music track source volumes
+    for (const trackName in this.#data.music) {
+      let track = this.#data.music[trackName];
+      track.source.setVolume(newVolume);
+    }
+    
+    // Store volume value
+    this.#masterVolume.bgm = newVolume;
+  }
+  
+  adjustMusicVolume(newVolume) {
+    this.setMusicVolume(this.#masterVolume.bgm + newVolume);
+  }
+  
+  setMusicPitch(newPitch) {
+    // Constrain pitch value
+    // TODO: Check these values
+    newPitch = MintMath.clamp(newPitch, 0.1, 30);
+    
+    // Set music track source pitches
+    for (const trackName in this.#data.music) {
+      let track = this.#data.music[trackName];
+      track.source.setPitch(newPitch);
+    }
+    
+    // Store pitch value
+    this.#masterBgmPitch = newPitch;
+  }
+  
+  adjustMusicPitch(newPitch) {
+    this.setMusicPitch(this.#masterBgmPitch + newPitch);
+  }
+  
+  #musicIsPaused() {
+    let isPaused = false;
+    
+    if (this.#musicTrackIsLoaded()) {
+      isPaused = this.#data.music[this.#currentMusicTrackName].source.isPaused();
+    }
+    
+    return isPaused;
   }
   
   #musicTrackIsLoaded() {
@@ -1389,8 +1487,26 @@ export class MintCrate {
   // Runtime
   // ---------------------------------------------------------------------------
   
+  #onPageFocusLost() {
+    this.#pageHasFocus = !document.hidden;
+    
+    if (!this.#pageHasFocus) {
+      this.#audioContext.suspend();
+    } else if (this.#gameHasFocus()) {
+      this.#audioContext.resume();
+    }
+  }
+  
   #gameHasFocus() {
-    return (document.activeElement === this.#frontCanvas);
+    let hasFocus = true;
+    if (
+      !this.#pageHasFocus
+      || document.activeElement !== this.#frontCanvas
+    ) {
+      hasFocus = false;
+    }
+    
+    return hasFocus;
   }
   
   #gameLoop(fpsTimeNow) {
@@ -1417,8 +1533,13 @@ export class MintCrate {
       this.#fpsFrameLast = fpsTimeNow;
     }
     
+    // Halt further update processing if game has lost focus
     if (!this.#gameHasFocus() && !this.#devMode) {
+      this.#audioContext.suspend();
       return;
+    }
+    else {
+      this.#audioContext.resume();
     }
     
     // Update inputs
@@ -1426,16 +1547,29 @@ export class MintCrate {
       inputHandler._update(this.#keyStates);
     }
     
-    // Handle music looping(?) and fading
+    // Clear out loaded music track name if it's come to its natural end
+    if (
+      this.#musicTrackIsLoaded()
+      && this.#data.music[this.#currentMusicTrackName].source.hasEnded()
+    ) {
+      let track = this.#data.music[this.#currentMusicTrackName];
+      track.state = this.#MUSIC_STATES.STOPPED;
+      this.#currentMusicTrackName = "";
+    }
+    
+    // Handle music and fading
     for (const trackName in this.#data.music) {
       let track = this.#data.music[trackName];
       
-      if (track.source.isPaused()) {
-        continue;
-      }
+      // Skip further music processing if track is paused
+      // TODO: Is there a point to this??
+      // if (track.source.isPaused()) {
+        // continue;
+      // }
       
-      // Handle fade-ins
+      // Handle music fades
       if (track.fade.remainingFrames > 0) {
+        // console.log(track.fade.remainingFrames, track.fade.affectingValue, track.relativeVolume);
         // Tick fade counter
         track.fade.remainingFrames--;
         // console.log(track.fade.remainingFrames);
@@ -1450,6 +1584,11 @@ export class MintCrate {
             track.relativeVolume = 1;
           }
           
+          // End fade timer early if the fade finished
+          if (track.relativeVolume === 1) {
+            track.fade.remainingFrames = 0;
+          }
+          
           // Set volume
           track.source.setVolume(track.relativeVolume * this.#masterVolume.bgm);
           
@@ -1461,8 +1600,26 @@ export class MintCrate {
             track.relativeVolume  = Math.max(0, track.relativeVolume);
             track.source.setVolume(track.relativeVolume * this.#masterVolume.bgm);
           } else {
-            track.source.stop();
-            this.#currentMusicTrackName = "";
+            track.relativeVolume = 0;
+          }
+          
+          // Finish fade if track's relative volume has reached zero
+          if (track.relativeVolume === 0) {
+            // End fade timer early if the fade finished
+            track.fade.remainingFrames = 0;
+            
+            // Pause/stop the sound source if fade is done
+            if (track.state === this.#MUSIC_STATES.PAUSING) {
+              console.log('1');
+              track.source.pause();
+              track.state = this.#MUSIC_STATES.PAUSED;
+            } else if (track.state === this.#MUSIC_STATES.STOPPING) {
+              console.log('2');
+              track.source.stop();
+              track.state = this.#MUSIC_STATES.STOPPED;
+            }
+            
+            console.log('done');
           }
         }
       }

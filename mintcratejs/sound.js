@@ -27,6 +27,7 @@ export class Sound {
   #sourceNode;
   #gainNode;
   #endCallback;
+  #hasEnded;
   
   #totalTimeElapsed;
   #startedTimestamp;
@@ -39,14 +40,19 @@ export class Sound {
     this.#audioContext = audioContext;
     this.#audioBuffer = audioBuffer;
     
+    this.#hasEnded = false;
+    
     this.#totalTimeElapsed = 0;
     this.#startedTimestamp = 0;
+    
+    this.#state = Sound.PLAYBACK_STATES.STOPPED;
   }
   
-  play(volume = 1, pitch = 1) {
+  play(volume, pitch, loopData) {
+    this.#hasEnded = false;
     this.#totalTimeElapsed = 0;
     
-    this.#play(volume, pitch, 0);
+    this.#play(volume, pitch, loopData, 0);
     
     this.#state = Sound.PLAYBACK_STATES.PLAYING;
   }
@@ -74,17 +80,22 @@ export class Sound {
     this.#state = Sound.PLAYBACK_STATES.PAUSED;
   }
   
-  resume(volume = 1, pitch = 1) {
+  resume(volume, pitch, loopData) {
     if (this.#state !== Sound.PLAYBACK_STATES.PAUSED) {
       return;
     }
     
-    this.#play(volume, pitch, this.#totalTimeElapsed);
+    this.#play(
+      volume,
+      pitch,
+      loopData,
+      (this.#totalTimeElapsed % this.#audioBuffer.duration)
+    );
     
     this.#state = Sound.PLAYBACK_STATES.PLAYING;
   }
   
-  #play(volume, pitch, startOffset) {
+  #play(volume, pitch, loopData, startOffset) {
     // Stop and clean up old audio data in case it's already playing
     this.#cleanUp();
     
@@ -100,11 +111,17 @@ export class Sound {
     this.setPitch(pitch);
     
     // Set looping properties
-    // TODO: This
-    // this.#sourceNode.loop
+    this.#sourceNode.loop      = loopData.enabled;
+    if (loopData.enabled) {
+      this.#sourceNode.loopStart = loopData.start;
+      this.#sourceNode.loopEnd   = loopData.end;
+    }
     
     // Set up callback to destroy sound when it's done playing
-    this.#endCallback = () => { this.#cleanUp(); };
+    this.#endCallback = () => {
+      this.#cleanUp();
+      this.#hasEnded = true;
+    };
     this.#sourceNode.addEventListener('ended', this.#endCallback);
     
     // Play sound
@@ -118,6 +135,10 @@ export class Sound {
   
   isPaused() {
     return (this.#state === Sound.PLAYBACK_STATES.PAUSED);
+  }
+  
+  hasEnded() {
+    return this.#hasEnded;
   }
   
   setVolume(volume) {

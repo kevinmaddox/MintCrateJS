@@ -1,0 +1,5 @@
+[ ] Check crossfades... the fading-out song seems to fade quicker than the
+    fading-in song
+[ ] The pitch appears to change the time offset of a track... can we calculate
+    the correct position when resuming it? Perhaps multiplying by the pitch
+    factor?
